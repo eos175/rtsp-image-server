@@ -70,8 +70,12 @@ func openCameraWithRetry(url string) (*gocv.VideoCapture, error) {
 			log.Info().Str("url", url).Msg("Attempting to open RTSP stream")
 			return gocv.VideoCaptureFile(url)
 		},
-		retry.Delay(2*time.Second),
-		retry.Attempts(10),
+		retry.Attempts(0),
+		retry.Delay(3*time.Second),
+		retry.DelayType(retry.FixedDelay),
+		retry.OnRetry(func(n uint, err error) { // Logging en cada intento
+			log.Warn().Err(err).Uint("attempt", n).Msg("retry connection")
+		}),
 	)
 }
 
