@@ -10,7 +10,7 @@ HTTP server that captures images from an RTSP stream and serves them as `.jpg` a
 
 * `--url`: RTSP stream URL (default: `rtsp://rtsp.jeosgram.io:8554/video/camera`)
 * `--addr`: HTTP server address (default: `:8080`)
-* `--quality`: Quality encode imaage (default: 90)
+* `--quality`: Quality encode image (default: 90)
 
 ## Endpoints
 
