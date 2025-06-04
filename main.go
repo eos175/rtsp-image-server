@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,9 +19,20 @@ import (
 	"gocv.io/x/gocv"
 )
 
+func Clamp[T cmp.Ordered](value, min, max T) T {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
 // Shared frame
 var currentFrame atomic.Pointer[gocv.Mat]
 var streamURL string
+var imgQuality int
 
 var matPool = sync.Pool{
 	New: func() any {
@@ -38,7 +50,12 @@ func main() {
 	var addr string
 	pflag.StringVar(&streamURL, "url", "rtsp://rtsp.jeosgram.io:8554/video/camera", "RTSP stream URL")
 	pflag.StringVar(&addr, "addr", ":8080", "HTTP server address")
+	pflag.IntVar(&imgQuality, "quality", 90, "Image encoding quality (1-100)")
 	pflag.Parse()
+
+	imgQuality = Clamp(imgQuality, 1, 100)
+
+	log.Info().Int("effective_img_quality", imgQuality).Msg("Using Img quality for encoding.")
 
 	// Start RTSP reader
 	go captureFrames(streamURL)
@@ -117,7 +134,7 @@ func serveJPEG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := []int{gocv.IMWriteJpegQuality, 90}
+	params := []int{gocv.IMWriteJpegQuality, imgQuality}
 	buf, err := gocv.IMEncodeWithParams(".jpg", *framePtr, params)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to encode JPEG")
@@ -154,7 +171,7 @@ func serveWebP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := []int{gocv.IMWriteWebpQuality, 90}
+	params := []int{gocv.IMWriteWebpQuality, imgQuality}
 	buf, err := gocv.IMEncodeWithParams(".webp", *framePtr, params)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to encode WebP")
