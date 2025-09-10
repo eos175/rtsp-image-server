@@ -111,12 +111,6 @@ func processCameraStream(webcam *gocv.VideoCapture) {
 		// Obtener un Mat reciclado
 		clonedPtr := matPool.Get().(*gocv.Mat)
 
-		// Reutilizar memoria
-		if clonedPtr.Empty() || clonedPtr.Cols() != img.Cols() || clonedPtr.Rows() != img.Rows() {
-			clonedPtr.Close()
-			*clonedPtr = gocv.NewMatWithSize(img.Rows(), img.Cols(), img.Type())
-		}
-
 		img.CopyTo(clonedPtr)
 
 		// Limpiar el frame anterior y guardar el nuevo
