@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"cmp"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"os/exec"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -128,8 +126,14 @@ func serveJPEG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clone frame to minimize race condition window during encoding
+	local := matPool.Get().(*gocv.Mat)
+	defer matPool.Put(local)
+
+	framePtr.CopyTo(local)
+
 	params := []int{gocv.IMWriteJpegQuality, imgQuality}
-	buf, err := gocv.IMEncodeWithParams(".jpg", *framePtr, params)
+	buf, err := gocv.IMEncodeWithParams(".jpg", *local, params)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to encode JPEG")
 		http.Error(w, "Failed to encode frame", http.StatusInternalServerError)
@@ -149,7 +153,7 @@ func serveJPEG(w http.ResponseWriter, r *http.Request) {
 		Msg("Snapshot downloaded")
 
 	// Si hay ?download=1, forzar descarga
-	if r.URL.Query().Get("download") == "1" {
+	if shouldDownload, _ := strconv.ParseBool(r.URL.Query().Get("download")); shouldDownload {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	} else {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
@@ -165,8 +169,14 @@ func serveWebP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clone frame to minimize race condition window during encoding
+	local := matPool.Get().(*gocv.Mat)
+	defer matPool.Put(local)
+
+	framePtr.CopyTo(local)
+
 	params := []int{gocv.IMWriteWebpQuality, imgQuality}
-	buf, err := gocv.IMEncodeWithParams(".webp", *framePtr, params)
+	buf, err := gocv.IMEncodeWithParams(".webp", *local, params)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to encode WebP")
 		http.Error(w, "Failed to encode frame", http.StatusInternalServerError)
@@ -185,33 +195,11 @@ func serveWebP(w http.ResponseWriter, r *http.Request) {
 		Str("url", streamURL).
 		Msg("Snapshot downloaded")
 
-	if r.URL.Query().Get("download") == "1" {
+	if shouldDownload, _ := strconv.ParseBool(r.URL.Query().Get("download")); shouldDownload {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	} else {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
 	}
 
 	_, _ = w.Write(buf.GetBytes())
-}
-
-// esto es muy lento para esenarios de la vida real
-func captureSnapshot(url string) ([]byte, error) {
-	cmd := exec.Command("ffmpeg",
-		"-rtsp_transport", "tcp", // Mejor para RTSP
-		"-i", url,
-		"-frames:v", "1", // Solo un frame
-		"-f", "image2",
-		"-q:v", "2", // Calidad JPG (1-31, 1=mejor)
-		"pipe:1", // Salida en stdout
-	)
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
-
-	err := cmd.Run()
-	if err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
 }
