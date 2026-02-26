@@ -1,4 +1,4 @@
-FROM ghcr.io/hybridgroup/opencv:4.12.0 AS build-stage
+FROM ghcr.io/hybridgroup/opencv:4.13.0 AS build-stage
 
 ENV GOPATH /go
 
