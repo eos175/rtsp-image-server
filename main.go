@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,27 +17,52 @@ import (
 	"gocv.io/x/gocv"
 )
 
-func Clamp[T cmp.Ordered](value, min, max T) T {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
+type Frame struct {
+	mat  gocv.Mat
+	refs atomic.Int32
 }
 
-// Shared frame
-var currentFrame atomic.Pointer[gocv.Mat]
+func NewFrame(src *gocv.Mat) *Frame {
+	f := &Frame{mat: gocv.NewMat()}
+	src.CopyTo(&f.mat)
+	f.refs.Store(1)
+	return f
+}
+
+func (f *Frame) Acquire() bool {
+	for {
+		n := f.refs.Load()
+		if n <= 0 {
+			return false
+		}
+		if f.refs.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
+func (f *Frame) Release() {
+	if f.refs.Add(-1) == 0 {
+		f.mat.Close()
+	}
+}
+
+func acquireCurrentFrame() *Frame {
+	for {
+		frame := currentFrame.Load()
+		if frame == nil {
+			return nil
+		}
+		if frame.Acquire() {
+			return frame
+		}
+		runtime.Gosched()
+	}
+}
+
+var currentFrame atomic.Pointer[Frame]
 var streamURL string
 var imgQuality int
-
-var matPool = sync.Pool{
-	New: func() any {
-		m := gocv.NewMat()
-		return &m
-	},
-}
 
 func main() {
 	// Setup logger
@@ -51,7 +76,7 @@ func main() {
 	pflag.IntVar(&imgQuality, "quality", 90, "Image encoding quality (1-100)")
 	pflag.Parse()
 
-	imgQuality = Clamp(imgQuality, 1, 100)
+	imgQuality = clamp(imgQuality, 1, 100)
 
 	log.Info().Int("effective_img_quality", imgQuality).Msg("Using Img quality for encoding.")
 
@@ -106,34 +131,30 @@ func processCameraStream(webcam *gocv.VideoCapture) {
 			return
 		}
 
-		// Obtener un Mat reciclado
-		clonedPtr := matPool.Get().(*gocv.Mat)
-
-		img.CopyTo(clonedPtr)
-
-		// Limpiar el frame anterior y guardar el nuevo
-		if prev := currentFrame.Swap(clonedPtr); prev != nil {
-			matPool.Put(prev) // En vez de Close, lo mandamos al Pool
+		newFrame := NewFrame(&img)
+		if old := currentFrame.Swap(newFrame); old != nil {
+			old.Release()
 		}
 	}
 }
 
 // Serve latest JPEG snapshot
 func serveJPEG(w http.ResponseWriter, r *http.Request) {
-	framePtr := currentFrame.Load()
-	if framePtr == nil || framePtr.Empty() {
+	frame := acquireCurrentFrame()
+	if frame == nil || frame.mat.Empty() {
+		if frame != nil {
+			frame.Release()
+		}
 		http.Error(w, "No frame available", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Clone frame to minimize race condition window during encoding
-	local := matPool.Get().(*gocv.Mat)
-	defer matPool.Put(local)
-
-	framePtr.CopyTo(local)
+	local := frame.mat.Clone()
+	frame.Release()
+	defer local.Close()
 
 	params := []int{gocv.IMWriteJpegQuality, imgQuality}
-	buf, err := gocv.IMEncodeWithParams(".jpg", *local, params)
+	buf, err := gocv.IMEncodeWithParams(".jpg", local, params)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to encode JPEG")
 		http.Error(w, "Failed to encode frame", http.StatusInternalServerError)
@@ -163,20 +184,21 @@ func serveJPEG(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveWebP(w http.ResponseWriter, r *http.Request) {
-	framePtr := currentFrame.Load()
-	if framePtr == nil || framePtr.Empty() {
+	frame := acquireCurrentFrame()
+	if frame == nil || frame.mat.Empty() {
+		if frame != nil {
+			frame.Release()
+		}
 		http.Error(w, "No frame available", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Clone frame to minimize race condition window during encoding
-	local := matPool.Get().(*gocv.Mat)
-	defer matPool.Put(local)
-
-	framePtr.CopyTo(local)
+	local := frame.mat.Clone()
+	frame.Release()
+	defer local.Close()
 
 	params := []int{gocv.IMWriteWebpQuality, imgQuality}
-	buf, err := gocv.IMEncodeWithParams(".webp", *local, params)
+	buf, err := gocv.IMEncodeWithParams(".webp", local, params)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to encode WebP")
 		http.Error(w, "Failed to encode frame", http.StatusInternalServerError)
@@ -202,4 +224,14 @@ func serveWebP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _ = w.Write(buf.GetBytes())
+}
+
+func clamp[T cmp.Ordered](value, min, max T) T {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
