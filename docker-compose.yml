@@ -4,6 +4,7 @@ services:
   stream-server-camera:
     image: stream-server
     command: --url rtsp://host.docker.internal:8554/camera
+    mem_limit: 512m
     ports:
       - "8081:8080"
     restart: unless-stopped
@@ -13,6 +14,7 @@ services:
   stream-server-thermal:
     image: stream-server
     command: --url rtsp://host.docker.internal:8554/thermal
+    mem_limit: 512m
     ports:
       - "8082:8080"
     restart: unless-stopped
